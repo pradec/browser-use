@@ -1,0 +1,63 @@
+name: Sync upstream main to fork main
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # every 6 hours
+  workflow_dispatch: {}
+
+permissions:
+  contents: write  # needed to push to the fork
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/browser-use/browser-use.git || true
+          git fetch upstream main
+
+      - name: Merge upstream/main into fork main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout main
+          # Try fast-forward first; if that fails, attempt a no-edit merge
+          if git merge --ff-only upstream/main; then
+            echo "Fast-forwarded main to upstream/main"
+          else
+            echo "Fast-forward not possible; attempting merge commit"
+            git merge --no-edit upstream/main
+          fi
+          # Push only if there are changes compared to the remote tracking branch
+          if git remote show origin >/dev/null 2>&1; then
+            # Ensure main tracks origin/main
+            git branch --set-upstream-to=origin/main main || true
+          fi
+          if git status --porcelain | grep -qE '^(M|A|D|R|C|U)'; then
+            git push origin main
+            echo "Pushed updates to origin/main"
+          else
+            # In some cases merge created commit but working tree is clean; check divergence
+            if ! git diff --quiet HEAD@{u}...HEAD; then
+              git push origin main
+              echo "Pushed updates to origin/main"
+            else
+              echo "No changes to push"
+            fi
+          fi
