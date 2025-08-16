@@ -291,6 +291,20 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self._set_file_system(file_system_path)
 		self._set_screenshot_service()
 
+		# Optionally wrap LLM with call logger according to config
+		try:
+			from browser_use.llm.logger_wrapper import LLMLoggerWrapper
+		except Exception:
+			LLMLoggerWrapper = None  # type: ignore
+
+		if getattr(CONFIG, 'BROWSER_USE_LLM_CALL_LOGS', False) and LLMLoggerWrapper is not None:
+			# Logs should be above screenshots i.e., in the agent directory sibling to 'screenshots'
+			log_dirname = getattr(CONFIG, 'BROWSER_USE_LLM_LOGS_DIRNAME', 'llm_calls')
+			def _log_dir_provider() -> Path:
+				return Path(self.agent_directory) / log_dirname
+
+			self.llm = LLMLoggerWrapper(self.llm, _log_dir_provider)
+
 		# Action setup
 		self._setup_action_models()
 		self._set_browser_use_version_and_source(source)
