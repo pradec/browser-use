@@ -212,6 +212,13 @@ class FlatEnvConfig(BaseSettings):
 	BROWSER_USE_ALLOWED_DOMAINS: str | None = Field(default=None)
 	BROWSER_USE_LLM_MODEL: str | None = Field(default=None)
 
+	# LLM call logging
+	BROWSER_USE_LLM_CALL_LOGS: bool = Field(default=False)
+	"""Enable logging of LLM request/response pairs to agent directory."""
+
+	BROWSER_USE_LLM_LOGS_DIRNAME: str = Field(default='llm_calls')
+	"""Directory name created under the agent directory (sibling to 'screenshots')."""
+
 
 class DBStyleEntry(BaseModel):
 	"""Database-style entry with UUID and metadata."""
