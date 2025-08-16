@@ -10,13 +10,18 @@ from pathlib import Path
 
 load_dotenv()
 
+# Enable LLM call logging
+os.environ["BROWSER_USE_LLM_CALL_LOGS"] = "true"
+
 
 TASK_PROMPT = (
     """
-Login in https://mellow-belekoy-b56ebb.netlify.app using "demo" as user name and "demo" as password. Post that submit a preauthorization request for a patient with the following details.
+Login in https://mellow-belekoy-b56ebb.netlify.app using "demo" as user name and "demo" as password. 
+Post that submit a preauthorization request for a patient with the following details.
+Don't click next until all the below provided fields are filled.
 
 Name: Anurag Sinha
-Date of Birth: "01/07/2001"
+Date of Birth: "01/07/2001". Return this exact text.
 Member Id: 12345
 Group Number: 12
 Phone Number: 9991123322
@@ -26,7 +31,7 @@ CPT Code: 72188
 Diagnosis: Persistent pain
 Critical Justification: Required to rule out
 Urgency: Routine
-Requested Date: "01/01/2025"
+Requested Date: "01/01/2025". Return this exact text. 
 """
 ).strip()
 
@@ -36,8 +41,9 @@ async def main() -> None:
     if not (os.getenv("OPENAI_API_KEY")):
         raise RuntimeError("OPENAI_API_KEY not set. Add it to your environment or .env file.")
 
-    # Use OpenAI's gpt-5-mini
-    base_llm = ChatOpenAI(model="gpt-5-mini")
+    # Use OpenAI's GPT-4.1-mini (configurable via OPENAI_MODEL, default "gpt-4.1-mini")
+    model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    base_llm = ChatOpenAI(model=model_name)
 
     # Constrain the agent to the target app domain for safety
     profile = BrowserProfile(
