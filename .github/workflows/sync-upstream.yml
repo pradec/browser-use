@@ -1,4 +1,4 @@
-name: Sync upstream main to fork main
+name: Sync fork with upstream
 
 on:
   schedule:
@@ -27,37 +27,28 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Add upstream and fetch
+      - name: Add upstream remote
         run: |
           git remote add upstream https://github.com/browser-use/browser-use.git || true
           git fetch upstream main
 
-      - name: Merge upstream/main into fork main
+      - name: Merge upstream/main into fork main and push if changed
         shell: bash
         run: |
           set -euo pipefail
           git checkout main
-          # Try fast-forward first; if that fails, attempt a no-edit merge
+          BEFORE=$(git rev-parse HEAD)
+          # Prefer fast-forward; fall back to a merge commit if needed
           if git merge --ff-only upstream/main; then
             echo "Fast-forwarded main to upstream/main"
           else
-            echo "Fast-forward not possible; attempting merge commit"
+            echo "Fast-forward not possible; creating merge commit"
             git merge --no-edit upstream/main
           fi
-          # Push only if there are changes compared to the remote tracking branch
-          if git remote show origin >/dev/null 2>&1; then
-            # Ensure main tracks origin/main
-            git branch --set-upstream-to=origin/main main || true
-          fi
-          if git status --porcelain | grep -qE '^(M|A|D|R|C|U)'; then
+          AFTER=$(git rev-parse HEAD)
+          if [ "$BEFORE" != "$AFTER" ]; then
+            echo "Detected new commit(s); pushing to fork main"
             git push origin main
-            echo "Pushed updates to origin/main"
           else
-            # In some cases merge created commit but working tree is clean; check divergence
-            if ! git diff --quiet HEAD@{u}...HEAD; then
-              git push origin main
-              echo "Pushed updates to origin/main"
-            else
-              echo "No changes to push"
-            fi
+            echo "Fork main already up to date with upstream/main; nothing to push"
           fi
