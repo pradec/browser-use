@@ -1,3 +1,4 @@
+import os
 from browser_use.dom.views import EnhancedDOMTreeNode, NodeType
 
 
@@ -101,12 +102,15 @@ class ClickableElementDetector:
 			'select',
 			'textarea',
 			'a',
-			'label',
 			'details',
 			'summary',
 			'option',
 			'optgroup',
 		}
+		# Conditionally include 'label' based on environment variable
+		if os.getenv('CLICKABLE_ELEMENT_TAG_LABEL', 'true').lower() in ('true', '1', 'yes'):
+			interactive_tags.add('label')
+		
 		if node.tag_name in interactive_tags:
 			return True
 
@@ -188,7 +192,11 @@ class ClickableElementDetector:
 			# Check if this small element has interactive properties
 			if node.attributes:
 				# Small elements with these attributes are likely interactive icons
-				icon_attributes = {'class', 'role', 'onclick', 'data-action', 'aria-label'}
+				icon_attributes = {'role', 'onclick', 'data-action', 'aria-label'}
+				# Conditionally include 'class' based on environment variable
+				if os.getenv('CLICKABLE_ELEMENT_ICON_CLASS', 'true').lower() in ('true', '1', 'yes'):
+					icon_attributes.add('class')
+				
 				if any(attr in node.attributes for attr in icon_attributes):
 					return True
 

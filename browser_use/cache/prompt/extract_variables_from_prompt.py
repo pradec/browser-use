@@ -15,6 +15,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+from task_logger import get_logger
+
 
 def parse_template_line(template_line: str) -> Tuple[Optional[str], List[str]]:
     """
@@ -44,7 +46,7 @@ def parse_template_line(template_line: str) -> Tuple[Optional[str], List[str]]:
     return pattern, tokens
 
 
-def extract_variables_from_prompts(template_content: str, new_content: str) -> Dict[str, str]:
+def extract_variables_from_prompts(template_content: str, new_content: str, logger) -> Dict[str, str]:
     """Extract variables by matching template against new prompt."""
     variables = {}
     
@@ -63,9 +65,9 @@ def extract_variables_from_prompts(template_content: str, new_content: str) -> D
         if not pattern or not tokens:
             continue
             
-        print(f"🔍 Processing template: '{template_line}'")
-        print(f"   Pattern: {pattern}")
-        print(f"   Tokens: {tokens}")
+        logger.info(f"🔍 Processing template: '{template_line}'")
+        logger.debug(f"   Pattern: {pattern}")
+        logger.debug(f"   Tokens: {tokens}")
         
         # Try to find matching line in new prompt
         found_match = False
@@ -76,19 +78,19 @@ def extract_variables_from_prompts(template_content: str, new_content: str) -> D
                 
             match = re.match(pattern, new_line, re.IGNORECASE)
             if match:
-                print(f"   ✅ Matched: '{new_line}'")
+                logger.success(f"Matched: '{new_line}'")
                 
                 # Extract values for each token
                 for i, token in enumerate(tokens):
                     value = match.group(i + 1).strip()
                     variables[token] = value
-                    print(f"      {token} = '{value}'")
+                    logger.info(f"      {token} = '{value}'")
                 
                 found_match = True
                 break
         
         if not found_match:
-            print(f"   ❌ No match found for template line")
+            logger.warning(f"No match found for template line")
     
     return variables
 
@@ -99,57 +101,81 @@ def main():
     parser.add_argument("--new-prompt", required=True, help="Path to new prompt with different values (.md)")
     parser.add_argument("--output", required=True, help="Output path for extracted variables (.json)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--run-dir", help="Run directory for logging (optional)")
     
     args = parser.parse_args()
+    
+    # Initialize logger
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        logger = get_logger("extract_variables_from_prompt", run_dir)
+    else:
+        logger = get_logger("extract_variables_from_prompt")
     
     template_path = Path(args.template)
     new_prompt_path = Path(args.new_prompt)
     output_path = Path(args.output)
     
     if not template_path.exists():
-        print(f"❌ Template file not found: {template_path}")
+        logger.error(f"Template file not found: {template_path}")
         return 1
         
     if not new_prompt_path.exists():
-        print(f"❌ New prompt file not found: {new_prompt_path}")
+        logger.error(f"New prompt file not found: {new_prompt_path}")
         return 1
     
     # Load template
-    print(f"📄 Loading template: {template_path}")
+    logger.file_operation("loading template", template_path)
     with open(template_path, 'r') as f:
         template_content = f.read()
     
     # Load new prompt
-    print(f"📄 Loading new prompt: {new_prompt_path}")
+    logger.file_operation("loading new prompt", new_prompt_path)
     with open(new_prompt_path, 'r') as f:
         new_content = f.read()
     
     if args.verbose:
-        print("\n📋 Template content:")
+        logger.info("📋 Template content:")
         for i, line in enumerate(template_content.split('\n'), 1):
             if '{var' in line:
-                print(f"   {i}: {line}")
+                logger.info(f"   {i}: {line}")
         
-        print("\n📋 New prompt content:")
+        logger.info("📋 New prompt content:")
         for i, line in enumerate(new_content.split('\n'), 1):
-            print(f"   {i}: {line}")
+            logger.info(f"   {i}: {line}")
     
     # Extract variables
-    print("\n🔍 Extracting variables...")
-    variables = extract_variables_from_prompts(template_content, new_content)
+    logger.info("🔍 Extracting variables...")
+    variables = extract_variables_from_prompts(template_content, new_content, logger)
     
-    print(f"\n📊 Extracted {len(variables)} variables:")
+    logger.statistics({
+        f"Extracted variables": len(variables)
+    })
+    
     for token, value in variables.items():
-        print(f"   {token}: '{value}'")
+        logger.info(f"   {token}: '{value}'")
     
     # Save results
-    print(f"\n💾 Saving variables to: {output_path}")
+    logger.file_operation("saving variables", output_path)
     with open(output_path, 'w') as f:
         json.dump(variables, f, indent=2)
     
-    print("✅ Variable extraction completed successfully!")
-    print(f"   📁 Output file: {output_path}")
-    print(f"   📊 Variables extracted: {len(variables)}")
+    logger.success("Variable extraction completed successfully!")
+    logger.statistics({
+        "Output file": str(output_path),
+        "Variables extracted": len(variables)
+    })
+    
+    # Save execution summary
+    summary_data = {
+        "template_file": str(template_path),
+        "new_prompt_file": str(new_prompt_path),
+        "output_file": str(output_path),
+        "variables_extracted": len(variables),
+        "variables": variables,
+        "success": True
+    }
+    logger.save_execution_summary(summary_data)
     
     return 0
 

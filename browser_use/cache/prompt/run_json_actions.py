@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import tempfile
 import traceback
 import uuid
@@ -22,16 +23,22 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
+# Configure clickable element detection to match cache creation
+os.environ["CLICKABLE_ELEMENT_ICON_CLASS"] = "false"
+os.environ["CLICKABLE_ELEMENT_TAG_LABEL"] = "false"
+
 from browser_use import Controller
 from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.filesystem.file_system import FileSystem
+from task_logger import get_logger
 
 
 class ActionExecutionLogger:
     """Enhanced logging and screenshot capture for action execution."""
     
-    def __init__(self, agent_directory: Path):
+    def __init__(self, agent_directory: Path, logger):
         self.agent_directory = agent_directory
+        self.logger = logger
         self.agent_directory.mkdir(parents=True, exist_ok=True)
         
         # Create subdirectories like Browser Use agent
@@ -62,11 +69,11 @@ class ActionExecutionLogger:
                 with open(descriptive_path, 'wb') as f:
                     f.write(screenshot_data)
                 
-                print(f"📸 Screenshot saved: {descriptive_name}")
+                self.logger.info(f"📸 Screenshot saved: {descriptive_name}")
                 return str(descriptive_path)
                 
         except Exception as e:
-            print(f"⚠️ Failed to capture screenshot '{label}': {e}")
+            self.logger.warning(f"Failed to capture screenshot '{label}': {e}")
             
         return None
     
@@ -74,8 +81,7 @@ class ActionExecutionLogger:
         """Log the start of an action with screenshot."""
         action_name = list(action.keys())[0] if action else "unknown"
         
-        print(f"\n🎬 Starting Action {action_index + 1}: {action_name}")
-        print(f"   Action details: {json.dumps(action, indent=2)}")
+        self.logger.action_start(action_index + 1, action_name, json.dumps(action, indent=2))
         
         # Capture before screenshot
         before_screenshot = await self.capture_screenshot(
@@ -126,22 +132,19 @@ class ActionExecutionLogger:
             "page_url_after": dom_summary.url if dom_summary else None,
         })
         
-        if success:
-            print(f"✅ Action {action_index} completed successfully")
-        else:
-            print(f"❌ Action {action_index} failed: {error_msg}")
+        self.logger.action_result(action_index, success, error_msg or "")
             
-            # For failures, also capture detailed DOM state
-            if dom_summary and dom_summary.dom_state:
-                dom_dump_path = self.logs_dir / f"action_{action_index:02d}_dom_failure.json"
-                with open(dom_dump_path, 'w') as f:
-                    json.dump({
-                        "dom_representation": dom_summary.dom_state.llm_representation(),
-                        "page_url": dom_summary.url,
-                        "page_title": dom_summary.title,
-                        "error_context": error_msg
-                    }, f, indent=2)
-                print(f"🔍 DOM state saved for debugging: {dom_dump_path}")
+        # For failures, also capture detailed DOM state
+        if not success and dom_summary and dom_summary.dom_state:
+            dom_dump_path = self.logs_dir / f"action_{action_index:02d}_dom_failure.json"
+            with open(dom_dump_path, 'w') as f:
+                json.dump({
+                    "dom_representation": dom_summary.dom_state.llm_representation(),
+                    "page_url": dom_summary.url,
+                    "page_title": dom_summary.title,
+                    "error_context": error_msg
+                }, f, indent=2)
+            self.logger.info(f"🔍 DOM state saved for debugging: {dom_dump_path}")
     
     def save_execution_summary(self):
         """Save comprehensive execution summary."""
@@ -166,20 +169,24 @@ class ActionExecutionLogger:
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=2)
         
-        print(f"\n📊 Execution Summary:")
-        print(f"   Total Actions: {total_actions}")
-        print(f"   Successful: {successful_actions}")
-        print(f"   Failed: {failed_actions}")
-        print(f"   Success Rate: {success_rate:.1f}%")
-        print(f"   Screenshots Captured: {self.screenshot_counter}")
-        print(f"   Summary saved to: {summary_path}")
+        self.logger.statistics({
+            "Total Actions": total_actions,
+            "Successful": successful_actions,
+            "Failed": failed_actions,
+            "Success Rate": f"{success_rate:.1f}%",
+            "Screenshots Captured": self.screenshot_counter
+        })
+        
+        self.logger.file_operation("saved execution summary", summary_path)
         
         # Print failure analysis
         if failed_actions > 0:
-            print(f"\n🔍 Failed Actions Analysis:")
+            self.logger.error("Failed Actions Analysis:")
             for log in self.execution_log:
                 if not log.get("success", False):
-                    print(f"   Action {log['action_index']}: {log['action_name']} - {log.get('error_message', 'Unknown error')}")
+                    self.logger.error(f"   Action {log['action_index']}: {log['action_name']} - {log.get('error_message', 'Unknown error')}")
+        
+        return summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -191,6 +198,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--continue-on-error", action="store_true", help="Continue execution on action errors")
     parser.add_argument("--delay", type=float, default=1.0, help="Delay between actions in seconds")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--run-dir", help="Run directory for logging (optional)")
     
     return parser.parse_args()
 
@@ -211,17 +219,17 @@ async def execute_actions_with_logging(
     controller: Controller, 
     browser_session: BrowserSession,
     file_system: FileSystem,
-    logger: ActionExecutionLogger,
+    action_logger: ActionExecutionLogger,
     continue_on_error: bool = True,
     delay: float = 1.0,
     verbose: bool = False
 ) -> None:
     """Execute actions with comprehensive logging and screenshot capture."""
     
-    print(f"🚀 Starting execution of {len(actions)} actions with enhanced logging...")
+    action_logger.logger.info(f"🚀 Starting execution of {len(actions)} actions with enhanced logging...")
     
     # Capture initial state
-    await logger.capture_screenshot(browser_session, "initial_state")
+    await action_logger.capture_screenshot(browser_session, "initial_state")
     
     # Create ActionModel from the controller registry
     ActionModel = controller.registry.create_action_model()
@@ -229,7 +237,7 @@ async def execute_actions_with_logging(
     for i, action in enumerate(actions):
         try:
             # Log action start with before screenshot
-            log_index = await logger.log_action_start(i, action, browser_session)
+            log_index = await action_logger.log_action_start(i, action, browser_session)
             
             # Convert action dict to ActionModel
             action_model = ActionModel.model_validate(action)
@@ -245,14 +253,14 @@ async def execute_actions_with_logging(
                 raise Exception(result.error)
             
             # Log successful completion
-            await logger.log_action_result(log_index, True, None, browser_session)
+            await action_logger.log_action_result(log_index, True, None, browser_session)
             
         except Exception as e:
             error_msg = str(e)
             
             # Log failure with detailed context
             if 'log_index' in locals():
-                await logger.log_action_result(log_index, False, error_msg, browser_session)
+                await action_logger.log_action_result(log_index, False, error_msg, browser_session)
             
             # Check if this is an expected error that we can skip
             expected_errors = [
@@ -263,17 +271,17 @@ async def execute_actions_with_logging(
             is_expected = any(expected in error_msg for expected in expected_errors)
             
             if not continue_on_error and not is_expected:
-                print(f"🛑 Stopping execution due to error in action {i + 1}")
+                action_logger.logger.error(f"Stopping execution due to error in action {i + 1}")
                 break
             elif is_expected and verbose:
-                print(f"   ⚠️ Skipping expected error for action {i + 1}")
+                action_logger.logger.warning(f"Skipping expected error for action {i + 1}")
         
         # Optional delay between actions
         if i < len(actions) - 1 and delay > 0:
             await asyncio.sleep(delay)
     
     # Capture final state
-    await logger.capture_screenshot(browser_session, "final_state")
+    await action_logger.capture_screenshot(browser_session, "final_state")
 
 
 async def main():
@@ -281,27 +289,34 @@ async def main():
     load_dotenv()
     args = parse_args()
     
+    # Initialize logger
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        logger = get_logger("run_json_actions", run_dir)
+    else:
+        logger = get_logger("run_json_actions")
+    
     # Create agent directory like Browser Use agent does
     agent_directory = create_agent_directory()
-    print(f"📁 Agent directory: {agent_directory}")
+    logger.info(f"📁 Agent directory: {agent_directory}")
     
-    # Initialize logger
-    logger = ActionExecutionLogger(agent_directory)
+    # Initialize action execution logger
+    action_logger = ActionExecutionLogger(agent_directory, logger)
     
     # Load actions from JSON file
     json_path = Path(args.json_file)
     if not json_path.exists():
-        print(f"❌ JSON file not found: {json_path}")
+        logger.error(f"JSON file not found: {json_path}")
         return 1
     
     with open(json_path, 'r') as f:
         actions = json.load(f)
     
     if not isinstance(actions, list):
-        print("❌ JSON file must contain a list of actions")
+        logger.error("JSON file must contain a list of actions")
         return 1
     
-    print(f"📋 Loaded {len(actions)} actions from {json_path}")
+    logger.info(f"📋 Loaded {len(actions)} actions from {json_path}")
     
     # Set up browser profile - use original website
     profile = BrowserProfile(
@@ -325,7 +340,7 @@ async def main():
         
         # Navigate to the target URL using controller
         if args.url:
-            print(f"🌐 Navigating to: {args.url}")
+            logger.info(f"🌐 Navigating to: {args.url}")
             go_to_url_action = ActionModel.model_validate({
                 "go_to_url": {"url": args.url}
             })
@@ -337,7 +352,7 @@ async def main():
             )
             
             if result.error:
-                print(f"❌ Failed to navigate to {args.url}: {result.error}")
+                logger.error(f"Failed to navigate to {args.url}: {result.error}")
                 return 1
             
             # Wait for page to load
@@ -349,28 +364,37 @@ async def main():
             controller=controller,
             browser_session=browser_session,
             file_system=file_system,
-            logger=logger,
+            action_logger=action_logger,
             continue_on_error=args.continue_on_error,
             delay=args.delay,
             verbose=args.verbose
         )
         
     except KeyboardInterrupt:
-        print("\n🛑 Execution interrupted by user")
+        logger.warning("Execution interrupted by user")
         return 1
     except Exception as e:
-        print(f"❌ Execution failed: {e}")
+        logger.error(f"Execution failed: {e}")
         if args.verbose:
             traceback.print_exc()
         return 1
     finally:
         # Save execution summary
-        logger.save_execution_summary()
+        summary = action_logger.save_execution_summary()
+        
+        # Save to main logger as well
+        logger.save_execution_summary({
+            "json_file": str(json_path),
+            "url": args.url,
+            "actions_executed": len(actions),
+            "agent_directory": str(agent_directory),
+            "action_execution_summary": summary
+        })
         
         # Clean up browser session
         await browser_session.stop()
         
-        print(f"\n🏁 Execution completed. Results saved to: {agent_directory}")
+        logger.success(f"Execution completed. Results saved to: {agent_directory}")
     
     return 0
 
