@@ -15,6 +15,8 @@ import copy
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Set
 
+from task_logger import get_logger
+
 
 def substitute_tokens_in_action(action: Dict[str, Any], values: Dict[str, str]) -> Tuple[Dict[str, Any], int]:
     """Substitute tokens in a single action with actual values."""
@@ -54,7 +56,7 @@ def substitute_tokens_in_action(action: Dict[str, Any], values: Dict[str, str]) 
     return substituted_action, substitutions_made
 
 
-def substitute_tokens_in_actions(template_actions: List[Dict], values: Dict[str, str], verbose: bool = False) -> Tuple[List[Dict], int, Set[str], Set[str]]:
+def substitute_tokens_in_actions(template_actions: List[Dict], values: Dict[str, str], logger, verbose: bool = False) -> Tuple[List[Dict], int, Set[str], Set[str]]:
     """Substitute tokens in all actions."""
     substituted_actions = []
     total_substitutions = 0
@@ -78,7 +80,7 @@ def substitute_tokens_in_actions(template_actions: List[Dict], values: Dict[str,
                         if verbose:
                             old_value = text
                             new_value = values.get(token, "NOT_FOUND")
-                            print(f"   Action {i+1}: {old_value} → '{new_value}'")
+                            logger.info(f"   Action {i+1}: {old_value} → '{new_value}'")
     
     return substituted_actions, total_substitutions, tokens_found, tokens_substituted
 
@@ -89,62 +91,88 @@ def main():
     parser.add_argument("--values", required=True, help="Path to values JSON file (token → value mapping)")
     parser.add_argument("--output", required=True, help="Output path for substituted actions JSON")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--run-dir", help="Run directory for logging (optional)")
     
     args = parser.parse_args()
+    
+    # Initialize logger
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        logger = get_logger("substitute_tokens_in_actions", run_dir)
+    else:
+        logger = get_logger("substitute_tokens_in_actions")
     
     template_path = Path(args.template_actions)
     values_path = Path(args.values)
     output_path = Path(args.output)
     
     if not template_path.exists():
-        print(f"❌ Template actions file not found: {template_path}")
+        logger.error(f"Template actions file not found: {template_path}")
         return 1
         
     if not values_path.exists():
-        print(f"❌ Values file not found: {values_path}")
+        logger.error(f"Values file not found: {values_path}")
         return 1
     
     # Load template actions
-    print(f"📄 Loading template actions: {template_path}")
+    logger.file_operation("loading template actions", template_path)
     with open(template_path, 'r') as f:
         template_actions = json.load(f)
     
     # Load values
-    print(f"📄 Loading values: {values_path}")
+    logger.file_operation("loading values", values_path)
     with open(values_path, 'r') as f:
         values = json.load(f)
     
     if args.verbose:
-        print(f"\n📊 Template actions: {len(template_actions)} total actions")
-        print(f"📊 Values available: {len(values)} tokens")
-        print("📋 Available tokens:")
+        logger.statistics({
+            "Template actions": len(template_actions),
+            "Values available": len(values)
+        })
+        logger.info("📋 Available tokens:")
         for token, value in values.items():
-            print(f"   {token}: '{value}'")
+            logger.info(f"   {token}: '{value}'")
     
     # Perform substitutions
-    print("\n🔄 Substituting tokens with values...")
+    logger.info("🔄 Substituting tokens with values...")
     substituted_actions, total_substitutions, tokens_found, tokens_substituted = substitute_tokens_in_actions(
-        template_actions, values, args.verbose
+        template_actions, values, logger, args.verbose
     )
     
     # Report results
-    print(f"\n📊 Substitution Results:")
-    print(f"   📁 Total actions processed: {len(template_actions)}")
-    print(f"   🔍 Tokens found in actions: {len(tokens_found)}")
-    print(f"   ✅ Tokens successfully substituted: {len(tokens_substituted)}")
-    print(f"   🔄 Total substitutions made: {total_substitutions}")
+    logger.statistics({
+        "Total actions processed": len(template_actions),
+        "Tokens found in actions": len(tokens_found),
+        "Tokens successfully substituted": len(tokens_substituted),
+        "Total substitutions made": total_substitutions
+    })
     
     if tokens_found - tokens_substituted:
-        print(f"   ⚠️  Tokens not substituted: {tokens_found - tokens_substituted}")
+        logger.warning(f"Tokens not substituted: {tokens_found - tokens_substituted}")
     
     # Save substituted actions
-    print(f"\n💾 Saving substituted actions to: {output_path}")
+    logger.file_operation("saving substituted actions", output_path)
     with open(output_path, 'w') as f:
         json.dump(substituted_actions, f, indent=2)
     
-    print("✅ Token substitution completed successfully!")
-    print(f"   📁 Output file: {output_path}")
-    print(f"   📊 Actions ready for execution: {len(substituted_actions)}")
+    logger.success("Token substitution completed successfully!")
+    logger.statistics({
+        "Output file": str(output_path),
+        "Actions ready for execution": len(substituted_actions)
+    })
+    
+    # Save execution summary
+    summary_data = {
+        "template_actions_file": str(template_path),
+        "values_file": str(values_path),
+        "output_file": str(output_path),
+        "actions_processed": len(template_actions),
+        "tokens_found": len(tokens_found),
+        "tokens_substituted": len(tokens_substituted),
+        "total_substitutions": total_substitutions,
+        "success": True
+    }
+    logger.save_execution_summary(summary_data)
     
     return 0
 

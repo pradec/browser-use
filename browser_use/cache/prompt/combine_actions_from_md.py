@@ -17,12 +17,15 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
+from task_logger import get_logger
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract actions from Markdown logs")
     parser.add_argument("--logs-dir", required=True, help="Directory containing .md files")
     parser.add_argument("--out", help="Output file (default: logs-dir/consolidated_actions.json)")
     parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("--run-dir", help="Run directory for logging (optional)")
     return parser.parse_args()
 
 
@@ -158,9 +161,16 @@ def extract_actions(response_json: dict) -> List[dict]:
 def main():
     args = parse_args()
     
+    # Initialize logger
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        logger = get_logger("combine_actions_from_md", run_dir)
+    else:
+        logger = get_logger("combine_actions_from_md")
+    
     logs_dir = Path(args.logs_dir).resolve()
     if not logs_dir.is_dir():
-        print(f"Error: Directory not found: {logs_dir}")
+        logger.error(f"Directory not found: {logs_dir}")
         return 1
     
     # Find all .md files and sort by modification time (chronological)
@@ -168,11 +178,10 @@ def main():
     md_files.sort(key=lambda f: f.stat().st_mtime)
     
     if not md_files:
-        print(f"No .md files found in {logs_dir}")
+        logger.error(f"No .md files found in {logs_dir}")
         return 1
     
-    if args.verbose:
-        print(f"Found {len(md_files)} .md files")
+    logger.info(f"Found {len(md_files)} .md files")
     
     all_actions = []
     
@@ -186,14 +195,14 @@ def main():
                 all_actions.extend(actions)
                 
                 if args.verbose:
-                    print(f"{md_file.name}: +{len(actions)} actions (total: {len(all_actions)})")
+                    logger.info(f"{md_file.name}: +{len(actions)} actions (total: {len(all_actions)})")
             else:
                 if args.verbose:
-                    print(f"{md_file.name}: +0 actions (no valid JSON in Response section)")
+                    logger.warning(f"{md_file.name}: +0 actions (no valid JSON in Response section)")
         
         except Exception as e:
             if args.verbose:
-                print(f"Error reading {md_file.name}: {e}")
+                logger.error(f"Error reading {md_file.name}: {e}")
             continue
     
     # Write output
@@ -202,10 +211,22 @@ def main():
     else:
         output_path = logs_dir / "consolidated_actions.json"
     
+    logger.file_operation("saving consolidated actions", output_path)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(all_actions, f, indent=2, ensure_ascii=False)
     
-    print(f"Wrote {len(all_actions)} actions to {output_path}")
+    logger.success(f"Wrote {len(all_actions)} actions to {output_path}")
+    
+    # Save execution summary
+    summary_data = {
+        "logs_directory": str(logs_dir),
+        "output_file": str(output_path),
+        "md_files_processed": len(md_files),
+        "actions_extracted": len(all_actions),
+        "success": True
+    }
+    logger.save_execution_summary(summary_data)
+    
     return 0
 
 

@@ -15,6 +15,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+from task_logger import get_logger
+
 
 def extract_text_values_from_actions(actions: List[Dict]) -> List[str]:
     """Extract all text values from actions that have text fields."""
@@ -175,53 +177,66 @@ def main():
     parser.add_argument("--prompt", required=True, help="Path to original prompt markdown file")
     parser.add_argument("--output-dir", default=".", help="Output directory for tokenized files")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("--run-dir", help="Run directory for logging (optional)")
     
     args = parser.parse_args()
+    
+    # Initialize logger
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+        logger = get_logger("create_tokenized_template", run_dir)
+    else:
+        logger = get_logger("create_tokenized_template")
     
     actions_path = Path(args.actions)
     prompt_path = Path(args.prompt)
     output_dir = Path(args.output_dir)
     
     if not actions_path.exists():
-        print(f"❌ Actions file not found: {actions_path}")
+        logger.error(f"Actions file not found: {actions_path}")
         return 1
         
     if not prompt_path.exists():
-        print(f"❌ Prompt file not found: {prompt_path}")
+        logger.error(f"Prompt file not found: {prompt_path}")
         return 1
     
     # Load actions
-    print(f"📄 Loading actions from: {actions_path}")
+    logger.file_operation("loading actions", actions_path)
     with open(actions_path, 'r') as f:
         actions = json.load(f)
     
     # Load prompt
-    print(f"📄 Loading prompt from: {prompt_path}")
+    logger.file_operation("loading prompt", prompt_path)
     with open(prompt_path, 'r') as f:
         prompt_content = f.read()
     
     # Extract text values from actions
-    print("🔍 Extracting text values from actions...")
+    logger.info("🔍 Extracting text values from actions...")
     text_values = extract_text_values_from_actions(actions)
     
     if args.verbose:
-        print(f"   Found {len(text_values)} total text values")
-        print(f"   Unique values: {len(set(text_values))}")
+        logger.statistics({
+            "Total text values found": len(text_values),
+            "Unique values": len(set(text_values))
+        })
     
     # Create token mapping
-    print("🏷️  Creating token mapping...")
+    logger.info("🏷️  Creating token mapping...")
     token_mapping = create_token_mapping(text_values)
     
-    print(f"📊 Created {len(token_mapping)} tokens:")
+    logger.statistics({
+        f"Tokens created": len(token_mapping)
+    })
+    
     for token, value in token_mapping.items():
-        print(f"   {token}: '{value}'")
+        logger.info(f"   {token}: '{value}'")
     
     # Tokenize actions
-    print("🔄 Tokenizing actions...")
+    logger.info("🔄 Tokenizing actions...")
     tokenized_actions = tokenize_actions(actions, token_mapping)
     
     # Tokenize prompt
-    print("🔄 Tokenizing prompt...")
+    logger.info("🔄 Tokenizing prompt...")
     tokenized_prompt = tokenize_prompt(prompt_content, token_mapping)
     
     # Generate output filenames
@@ -233,25 +248,41 @@ def main():
     token_mapping_path = output_dir / f"{actions_stem}_token_mapping.json"
     
     # Save tokenized actions
-    print(f"💾 Saving tokenized actions to: {tokenized_actions_path}")
+    logger.file_operation("saving tokenized actions", tokenized_actions_path)
     with open(tokenized_actions_path, 'w') as f:
         json.dump(tokenized_actions, f, indent=2)
     
     # Save tokenized prompt
-    print(f"💾 Saving tokenized prompt to: {tokenized_prompt_path}")
+    logger.file_operation("saving tokenized prompt", tokenized_prompt_path)
     with open(tokenized_prompt_path, 'w') as f:
         f.write(tokenized_prompt)
     
     # Save token mapping for reference
-    print(f"💾 Saving token mapping to: {token_mapping_path}")
+    logger.file_operation("saving token mapping", token_mapping_path)
     with open(token_mapping_path, 'w') as f:
         json.dump(token_mapping, f, indent=2)
     
-    print("✅ Tokenization completed successfully!")
-    print(f"   📁 Generated files:")
-    print(f"      • {tokenized_actions_path}")
-    print(f"      • {tokenized_prompt_path}")
-    print(f"      • {token_mapping_path}")
+    logger.success("Tokenization completed successfully!")
+    logger.info("📁 Generated files:")
+    logger.info(f"      • {tokenized_actions_path}")
+    logger.info(f"      • {tokenized_prompt_path}")
+    logger.info(f"      • {token_mapping_path}")
+    
+    # Save execution summary
+    summary_data = {
+        "actions_file": str(actions_path),
+        "prompt_file": str(prompt_path),
+        "output_directory": str(output_dir),
+        "tokens_created": len(token_mapping),
+        "text_values_processed": len(text_values),
+        "generated_files": [
+            str(tokenized_actions_path),
+            str(tokenized_prompt_path),
+            str(token_mapping_path)
+        ],
+        "success": True
+    }
+    logger.save_execution_summary(summary_data)
     
     return 0
 
