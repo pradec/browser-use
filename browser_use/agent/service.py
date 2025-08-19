@@ -84,27 +84,33 @@ def log_response(response: AgentOutput, registry=None, logger=None) -> None:
 
 	# Only log thinking if it's present
 	if response.current_state.thinking:
-		logger.info(f'💡 Thinking:\n{response.current_state.thinking}')
+		logger.debug(f'💡 Thinking:\n{response.current_state.thinking}')
 
 	# Only log evaluation if it's not empty
 	eval_goal = response.current_state.evaluation_previous_goal
 	if eval_goal:
 		if 'success' in eval_goal.lower():
 			emoji = '👍'
+			# Green color for success
+			logger.info(f'  \033[32m{emoji} Eval: {eval_goal}\033[0m')
 		elif 'failure' in eval_goal.lower():
 			emoji = '⚠️'
+			# Red color for failure
+			logger.info(f'  \033[31m{emoji} Eval: {eval_goal}\033[0m')
 		else:
 			emoji = '❔'
-		logger.info(f'{emoji} Eval: {eval_goal}')
+			# No color for unknown/neutral
+			logger.info(f'  {emoji} Eval: {eval_goal}')
 
 	# Always log memory if present
 	if response.current_state.memory:
-		logger.info(f'🧠 Memory: {response.current_state.memory}')
+		logger.debug(f'🧠 Memory: {response.current_state.memory}')
 
 	# Only log next goal if it's not empty
 	next_goal = response.current_state.next_goal
 	if next_goal:
-		logger.info(f'🎯 Next goal: {next_goal}\n')
+		# Blue color for next goal
+		logger.info(f'  \033[34m🎯 Next goal: {next_goal}\033[0m')
 	else:
 		logger.info('')  # Add empty line for spacing
 
@@ -326,8 +332,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			self.settings.use_vision = False
 		# Note: No longer checking planner_llm for XAI models (deprecated)
 
-		self.logger.info(
-			f'🧠 Starting a browser-use agent {self.version} with base_model={self.llm.model}'
+		self.logger.info(f'🧠 Starting a browser-use version {self.version} with model={self.llm.model}')
+		logger.debug(
 			f'{" +vision" if self.settings.use_vision else ""}'
 			f' extraction_model={self.settings.page_extraction_llm.model if self.settings.page_extraction_llm else "Unknown"}'
 			# Note: No longer logging planner_model (deprecated)
@@ -464,7 +470,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.has_downloads_path = self.browser_session.browser_profile.downloads_path is not None
 		if self.has_downloads_path:
 			self._last_known_downloads: list[str] = []
-			self.logger.info('📁 Initialized download tracking for agent')
+			self.logger.debug('📁 Initialized download tracking for agent')
 
 		self._external_pause_event = asyncio.Event()
 		self._external_pause_event.set()
@@ -521,7 +527,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			for file_path in new_files:
 				self.logger.info(f'📄 New file available: {file_path}')
 		else:
-			self.logger.info(f'📁 No new downloads detected (tracking {len(current_files)} files)')
+			self.logger.debug(f'📁 No new downloads detected (tracking {len(current_files)} files)')
 
 	def _set_file_system(self, file_system_path: str | None = None) -> None:
 		# Check for conflicting parameters
@@ -538,7 +544,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				self.file_system = FileSystem.from_state(self.state.file_system_state)
 				# The parent directory of base_dir is the original file_system_path
 				self.file_system_path = str(self.file_system.base_dir)
-				logger.info(f'💾 File system restored from state to: {self.file_system_path}')
+				logger.debug(f'💾 File system restored from state to: {self.file_system_path}')
 				return
 			except Exception as e:
 				logger.error(f'💾 Failed to restore file system from state: {e}')
@@ -560,7 +566,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		# Save file system state to agent state
 		self.state.file_system_state = self.file_system.get_state()
 
-		logger.info(f'💾 File system path: {self.file_system_path}')
+		logger.debug(f'💾 File system path: {self.file_system_path}')
 
 	def _set_screenshot_service(self) -> None:
 		"""Initialize screenshot service using agent directory"""
@@ -568,7 +574,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			from browser_use.screenshots.service import ScreenshotService
 
 			self.screenshot_service = ScreenshotService(self.agent_directory)
-			logger.info(f'📸 Screenshot service initialized in: {self.agent_directory}/screenshots')
+			logger.debug(f'📸 Screenshot service initialized in: {self.agent_directory}/screenshots')
 		except Exception as e:
 			logger.error(f'📸 Failed to initialize screenshot service: {e}.')
 			raise e
@@ -802,11 +808,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		# Log completion results
 		if self.state.last_result and len(self.state.last_result) > 0 and self.state.last_result[-1].is_done:
-			self.logger.info(f'📄 Result: {self.state.last_result[-1].extracted_content}')
+			success = self.state.last_result[-1].success
+			if success:
+				# Green color for success
+				self.logger.info(f'📄 \033[32m Result:\033[0m {self.state.last_result[-1].extracted_content}\n\n')
+			else:
+				# Red color for failure
+				self.logger.info(f'📄 \033[31m Result:\033[0m {self.state.last_result[-1].extracted_content}\n\n')
 			if self.state.last_result[-1].attachments:
-				self.logger.info('📎 Click links below to access the attachments:')
-				for file_path in self.state.last_result[-1].attachments:
-					self.logger.info(f'👉 {file_path}')
+				for i, file_path in enumerate(self.state.last_result[-1].attachments):
+					self.logger.info(f'👉 Attachment {i + 1}: {file_path}')
 
 	async def _handle_step_error(self, error: Exception) -> None:
 		"""Handle all types of errors that can occur during a step"""
@@ -912,7 +923,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			msg += '\nIf the task is not yet fully finished as requested by the user, set success in "done" to false! E.g. if not all steps are fully completed.'
 			msg += '\nIf the task is fully finished, set success in "done" to true.'
 			msg += '\nInclude everything you found out for the ultimate task in the done text.'
-			self.logger.info('Last step finishing up')
+			self.logger.debug('Last step finishing up')
 			self._message_manager._add_context_message(UserMessage(content=msg))
 			self.AgentOutput = self.DoneAgentOutput
 
@@ -1060,7 +1071,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 	def _log_agent_run(self) -> None:
 		"""Log the agent run"""
-		self.logger.info(f'🚀 Starting task: {self.task}')
+		# Blue color for task
+		self.logger.info(f'\033[34m🚀 Task: {self.task}\033[0m')
 
 		self.logger.debug(f'🤖 Browser-Use Library Version {self.version} ({self.source})')
 
@@ -1069,9 +1081,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		url = browser_state_summary.url if browser_state_summary else ''
 		url_short = url[:50] + '...' if len(url) > 50 else url
 		interactive_count = len(browser_state_summary.dom_state.selector_map) if browser_state_summary else 0
-		self.logger.info(
-			f'📍 Step {self.state.n_steps}: Evaluating page with {interactive_count} interactive elements on: {url_short}'
-		)
+		self.logger.info('\n')
+		self.logger.info(f'📍 Step {self.state.n_steps}:')
+		self.logger.debug(f'Evaluating page with {interactive_count} interactive elements on: {url_short}')
 
 	def _log_next_action_summary(self, parsed: 'AgentOutput') -> None:
 		"""Log a comprehensive summary of the next action(s)"""
@@ -1134,7 +1146,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		status_parts = [part for part in [success_indicator, failure_indicator] if part]
 		status_str = ' | '.join(status_parts) if status_parts else '✅ 0'
 
-		self.logger.info(f'📍 Step {self.state.n_steps}: Ran {action_count} actions in {step_duration:.2f}s: {status_str}')
+		self.logger.debug(
+			f'📍 Step {self.state.n_steps}: Ran {action_count} action{"" if action_count == 1 else "s"} in {step_duration:.2f}s: {status_str}'
+		)
 
 	def _log_agent_event(self, max_steps: int, agent_run_error: str | None = None) -> None:
 		"""Sent the agent event for this run to telemetry"""
@@ -1219,6 +1233,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			match = re.search(pattern, task)
 			if match:
 				url = match.group(0)
+				# Remove trailing punctuation that's not part of URLs
+				url = re.sub(r'[.,;:!?()\[\]]+$', '', url)
 				# Add https:// if missing
 				if not url.startswith(('http://', 'https://')):
 					url = 'https://' + url
@@ -1431,7 +1447,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 		except KeyboardInterrupt:
 			# Already handled by our signal handler, but catch any direct KeyboardInterrupt as well
-			self.logger.info('Got KeyboardInterrupt during execution, returning current history')
+			self.logger.debug('Got KeyboardInterrupt during execution, returning current history')
 			agent_run_error = 'KeyboardInterrupt'
 
 			self.history.usage = await self.token_cost_service.get_usage_summary()
@@ -1457,7 +1473,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					self.logger.error(f'Failed to log telemetry event: {log_e}', exc_info=True)
 			else:
 				# ADDED: Info message when custom telemetry for SIGINT was already logged
-				self.logger.info('Telemetry for force exit (SIGINT) was logged by custom exit callback.')
+				self.logger.debug('Telemetry for force exit (SIGINT) was logged by custom exit callback.')
 
 			# NOTE: CreateAgentSessionEvent and CreateAgentTaskEvent are now emitted at the START of run()
 			# to match backend requirements for CREATE events to be fired when entities are created,
@@ -1489,7 +1505,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 						# Wait up to 1 second for auth to start and print URL
 						await asyncio.wait_for(self.cloud_sync.auth_task, timeout=1.0)
 					except TimeoutError:
-						logger.info('Cloud authentication started - continuing in background')
+						logger.debug('Cloud authentication started - continuing in background')
 					except Exception as e:
 						logger.debug(f'Cloud authentication error: {e}')
 
@@ -1534,7 +1550,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				# ONLY ALLOW TO CALL `done` IF IT IS A SINGLE ACTION
 				if action.model_dump(exclude_unset=True).get('done') is not None:
 					msg = f'Done action is allowed only as a single action - stopped after action {i} / {total_actions}.'
-					logger.info(msg)
+					self.logger.debug(msg)
 					break
 
 			# DOM synchronization check - verify element indexes are still valid AFTER first action
@@ -1554,7 +1570,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				new_target_hash = new_target.parent_branch_hash() if new_target else None
 
 				if orig_target_hash != new_target_hash:
-					msg = f'Element index changed after action {i} / {total_actions}, because page changed.'
+					msg = f'Page changed after action {i} / {total_actions}'
 					logger.info(msg)
 					results.append(
 						ActionResult(
@@ -1569,7 +1585,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				new_element_hashes = {e.parent_branch_hash() for e in new_selector_map.values()}
 				if check_for_new_elements and not new_element_hashes.issubset(cached_element_hashes):
 					# next action requires index but there are new elements on the page
-					msg = f'Something new appeared after action {i} / {total_actions}, following actions are NOT executed and should be retried.'
+					msg = f'Something new appeared after action {i} / {total_actions}'
 					logger.info(msg)
 					results.append(
 						ActionResult(
@@ -1587,6 +1603,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			red = '\033[91m'
 			green = '\033[92m'
 			cyan = '\033[96m'
+			blue = '\033[34m'
 			reset = '\033[0m'
 
 			try:
@@ -1601,8 +1618,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				action_params = str(action_params)
 				action_params = f'{action_params[:122]}...' if len(action_params) > 128 else action_params
 				time_start = time.time()
-
-				self.logger.info(f'🦾 {cyan}[ACTION {i + 1}/{total_actions}] {action_name}({action_params})... {reset}')
+				self.logger.info(f'  🦾 {blue}[ACTION {i + 1}/{total_actions}]{reset} {action_params}')
 
 				result = await self.controller.act(
 					action=action,
@@ -1618,16 +1634,17 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				time_elapsed = time_end - time_start
 				results.append(result)
 
-				self.logger.info(
-					f'☑️ Executed action {i + 1}/{total_actions}: {green}{action_name}({action_params}){reset} in {time_elapsed:.2f}s'
+				self.logger.debug(
+					f'☑️ Executed action {i + 1}/{total_actions}: {green}{action_params}{reset} in {time_elapsed:.2f}s'
 				)
+
 				if results[-1].is_done or results[-1].error or i == total_actions - 1:
 					break
 
 			except Exception as e:
 				# Handle any exceptions during action execution
 				self.logger.error(
-					f'❌ Executing action {i + 1} failed in {time_elapsed:.2f}s {red}{action_name}({action_params}) -> {type(e).__name__}: {e}{reset}'
+					f'❌ Executing action {i + 1} failed in {time_elapsed:.2f}s {red}({action_params}) -> {type(e).__name__}: {e}{reset}'
 				)
 				raise e
 
