@@ -44,11 +44,14 @@ async def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Using a prompt file
+  # Using a prompt file with OpenAI
   python run_task.py --prompt preauth_request.md
   
   # Using direct prompt text
   python run_task.py --prompt "Navigate to example.com and click the login button"
+  
+  # Using LM Studio (local LLM)
+  python run_task.py --prompt task.md --base-url "http://localhost:1234/v1" --api-key "lm-studio" --model "local-model"
   
   # With custom model and domains
   python run_task.py --prompt task.md --model gpt-4o --domain "example.com" --domain "*.example.org"
@@ -65,6 +68,16 @@ Examples:
         "--model", "-m",
         default="gpt-4.1-mini",
         help="OpenAI model to use (default: gpt-4.1-mini)"
+    )
+    
+    parser.add_argument(
+        "--base-url",
+        help="Base URL for OpenAI-compatible API (e.g., http://localhost:1234/v1 for LM Studio)"
+    )
+    
+    parser.add_argument(
+        "--api-key",
+        help="API key for the model provider (use 'lm-studio' or any string for local models)"
     )
     
     parser.add_argument(
@@ -100,17 +113,32 @@ Examples:
     else:
         logger = get_logger("run_task")
 
-    # Ensure API key is present
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.error("OPENAI_API_KEY not set. Add it to your environment or .env file.")
-        raise RuntimeError("OPENAI_API_KEY not set. Add it to your environment or .env file.")
+    # Ensure API key is present (unless using custom base_url with local model)
+    api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key and not args.base_url:
+        logger.error("OPENAI_API_KEY not set. Add it to your environment or .env file, or use --api-key for custom endpoints.")
+        raise RuntimeError("OPENAI_API_KEY not set. Add it to your environment or .env file, or use --api-key for custom endpoints.")
 
     # Load task prompt
     task_prompt = load_task_prompt(args.prompt, logger)
     
     # Use specified model or environment override
     model_name = os.getenv("OPENAI_MODEL", args.model)
-    base_llm = ChatOpenAI(model=model_name)
+    
+    # Configure LLM with custom base_url if provided (for LM Studio, etc.)
+    if args.base_url:
+        base_llm = ChatOpenAI(
+            model=model_name,
+            base_url=args.base_url,
+            api_key=api_key or "lm-studio"  # Default API key for local models
+        )
+        logger.info(f"🔗 Using custom endpoint: {args.base_url}")
+    else:
+        base_llm = ChatOpenAI(
+            model=model_name,
+            api_key=api_key
+        )
+    
     logger.info(f"🤖 Using model: {model_name}")
 
     # Set up browser profile
