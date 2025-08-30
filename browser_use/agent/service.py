@@ -3,6 +3,7 @@ import gc
 import inspect
 import json
 import logging
+import os
 import re
 import sys
 import tempfile
@@ -267,18 +268,35 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self._set_file_system(file_system_path)
 		self._set_screenshot_service()
 
-		# Optionally wrap LLM with call logger according to config
+		# Optionally wrap LLM with call logger/cache according to config
 		try:
 			from browser_use.llm.logger_wrapper import LLMLoggerWrapper
 		except Exception:
 			LLMLoggerWrapper = None  # type: ignore
 
-		if getattr(CONFIG, 'BROWSER_USE_LLM_CALL_LOGS', False) and LLMLoggerWrapper is not None:
-			# Logs should be above screenshots i.e., in the agent directory sibling to 'screenshots'
+		# Check if LLM caching is enabled
+		llm_cache_enabled = os.environ.get('BROWSER_USE_LLM_CACHE', '').lower() in ('true', '1', 'yes', 'on')
+		
+		if llm_cache_enabled:
+			# Use cached logger wrapper if caching is enabled
+			try:
+				from browser_use.cache.llm import CachedLLMLoggerWrapper
+				log_dirname = getattr(CONFIG, 'BROWSER_USE_LLM_LOGS_DIRNAME', 'llm_calls')
+				def _log_dir_provider() -> Path:
+					return Path(self.agent_directory) / log_dirname
+				self.llm = CachedLLMLoggerWrapper(self.llm, _log_dir_provider)
+			except Exception:
+				# Fallback to regular logging if cache import fails
+				if getattr(CONFIG, 'BROWSER_USE_LLM_CALL_LOGS', False) and LLMLoggerWrapper is not None:
+					log_dirname = getattr(CONFIG, 'BROWSER_USE_LLM_LOGS_DIRNAME', 'llm_calls')
+					def _log_dir_provider() -> Path:
+						return Path(self.agent_directory) / log_dirname
+					self.llm = LLMLoggerWrapper(self.llm, _log_dir_provider)
+		elif getattr(CONFIG, 'BROWSER_USE_LLM_CALL_LOGS', False) and LLMLoggerWrapper is not None:
+			# Use regular logger wrapper if only logging is enabled
 			log_dirname = getattr(CONFIG, 'BROWSER_USE_LLM_LOGS_DIRNAME', 'llm_calls')
 			def _log_dir_provider() -> Path:
 				return Path(self.agent_directory) / log_dirname
-
 			self.llm = LLMLoggerWrapper(self.llm, _log_dir_provider)
 
 		# Action setup
