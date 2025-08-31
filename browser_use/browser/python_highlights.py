@@ -4,9 +4,11 @@ This module replaces JavaScript-based highlighting with fast Python image proces
 to draw bounding boxes around interactive elements directly on screenshots.
 """
 
+import asyncio
 import base64
 import io
 import logging
+import os
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -60,6 +62,7 @@ def draw_enhanced_bounding_box_with_text(
 	font: ImageFont.FreeTypeFont | None = None,
 	element_type: str = 'div',
 	image_size: tuple[int, int] = (2000, 1500),
+	device_pixel_ratio: float = 1.0,
 ) -> None:
 	"""Draw an enhanced bounding box with much bigger index containers and dashed borders."""
 	x1, y1, x2, y2 = bbox
@@ -93,10 +96,12 @@ def draw_enhanced_bounding_box_with_text(
 	# Draw much bigger index overlay if we have index text
 	if text:
 		try:
-			# Scale font size based on image dimensions for consistent appearance across viewports
+			# Scale font size for appropriate sizing across different resolutions
 			img_width, img_height = image_size
-			# Base font size scales with viewport width (36px for 1200px viewport)
-			base_font_size = max(16, min(48, int(img_width * 0.03)))  # 3% of viewport width
+
+			css_width = img_width  # / device_pixel_ratio
+			# Much smaller scaling - 1% of CSS viewport width, max 16px to prevent huge highlights
+			base_font_size = max(10, min(20, int(css_width * 0.01)))
 			big_font = None
 			try:
 				big_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', base_font_size)
@@ -121,8 +126,8 @@ def draw_enhanced_bounding_box_with_text(
 				text_width = bbox_text[2] - bbox_text[0]
 				text_height = bbox_text[3] - bbox_text[1]
 
-			# Scale padding based on viewport size for consistent appearance
-			padding = max(4, int(img_width * 0.005))  # 0.5% of viewport width
+			# Scale padding appropriately for different resolutions
+			padding = max(4, min(10, int(css_width * 0.005)))  # 0.3% of CSS width, max 4px
 			element_width = x2 - x1
 			element_height = y2 - y1
 
@@ -130,15 +135,17 @@ def draw_enhanced_bounding_box_with_text(
 			container_width = text_width + padding * 2
 			container_height = text_height + padding * 2
 
-			# Position in top-left corner (inside if fits, outside if too small)
-			if element_width >= container_width and element_height >= container_height:
-				# Place inside top-left corner
-				bg_x1 = x1 + 2  # Small offset from edge
-				bg_y1 = y1 + 2
+			# Position in top center - for small elements, place further up to avoid blocking content
+			# Center horizontally within the element
+			bg_x1 = x1 + (element_width - container_width) // 2
+
+			# Simple rule: if element is small, place index further up to avoid blocking icons
+			if element_width < 60 or element_height < 30:
+				# Small element: place well above to avoid blocking content
+				bg_y1 = max(0, y1 - container_height - 5)
 			else:
-				# Place outside top-left corner
-				bg_x1 = x1
-				bg_y1 = max(0, y1 - container_height)
+				# Regular element: place inside with small offset
+				bg_y1 = y1 + 2
 
 			bg_x2 = bg_x1 + container_width
 			bg_y2 = bg_y1 + container_height
@@ -339,14 +346,16 @@ def process_element_highlight(
 				# Use the meaningful text that matches what the LLM sees
 				meaningful_text = element.get_meaningful_text_for_llm()
 				# Show ID only if meaningful text is less than 5 characters
-				if len(meaningful_text) < 5:
+				if len(meaningful_text) < 3:
 					index_text = str(element_index)
 			else:
 				# Always show ID when filter is disabled
 				index_text = str(element_index)
 
 		# Draw enhanced bounding box with bigger index
-		draw_enhanced_bounding_box_with_text(draw, (x1, y1, x2, y2), color, index_text, font, tag_name, image_size)
+		draw_enhanced_bounding_box_with_text(
+			draw, (x1, y1, x2, y2), color, index_text, font, tag_name, image_size, device_pixel_ratio
+		)
 
 	except Exception as e:
 		logger.debug(f'Failed to draw highlight for element {element_id}: {e}')
@@ -471,6 +480,20 @@ async def create_highlighted_screenshot_async(
 			logger.debug(f'Failed to get viewport info from CDP: {e}')
 
 	# Create highlighted screenshot with async processing
-	return await create_highlighted_screenshot(
+	final_screenshot = await create_highlighted_screenshot(
 		screenshot_b64, selector_map, device_pixel_ratio, viewport_offset_x, viewport_offset_y, filter_highlight_ids
 	)
+
+	filename = os.getenv('BROWSER_USE_SCREENSHOT_FILE')
+	if filename:
+
+		def _write_screenshot():
+			try:
+				with open(filename, 'wb') as f:
+					f.write(base64.b64decode(final_screenshot))
+				logger.debug('Saved screenshot to ' + str(filename))
+			except Exception as e:
+				logger.warning(f'Failed to save screenshot to {filename}: {e}')
+
+		await asyncio.to_thread(_write_screenshot)
+	return final_screenshot
